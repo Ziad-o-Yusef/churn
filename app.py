@@ -372,7 +372,7 @@ if submitted:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Prediction Result")
 
-    if source == "DEMO_FALLBACK":
+    
        
 
     if prediction == 1:
