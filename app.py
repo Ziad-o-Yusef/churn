@@ -1,397 +1,53 @@
-import streamlit as st
 import requests
 
-# =========================
-# PAGE CONFIG
-# =========================
-st.set_page_config(
-    page_title="Cell C Churn Predictor",
-    page_icon="📊",
-    layout="wide"
-)
+url = "https://api-2c61e5b3-2928c99d-dku.eu-west-2.app.dataiku.io/public/api/v1/telco-churn-service/predict-churn/predict"
+api_key = "YOUR_NEW_KEY"
 
-# =========================
-# CONFIG
-# =========================
-ENDPOINT_URL = "https://api-2c61e5b3-2928c99d-dku.eu-west-2.app.dataiku.io/public/api/v1/telco-churn-service/predict-churn/predict"
-BEARER_TOKEN = "PUT_YOUR_TOKEN_HERE"  # الأفضل تحطه في st.secrets
-LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b6/Cell_C_New_2024_logo.svg/1280px-Cell_C_New_2024_logo.svg.png"
-
-# =========================
-# HELPERS
-# =========================
-def normalize_prediction(value):
-    """Convert prediction to 0/1 when possible."""
-    if isinstance(value, bool):
-        return int(value)
-
-    if isinstance(value, (int, float)):
-        if value in [0, 1]:
-            return int(value)
-
-    if isinstance(value, str):
-        cleaned = value.strip().lower()
-        if cleaned in ["1", "true", "yes", "churn", "will churn"]:
-            return 1
-        if cleaned in ["0", "false", "no", "not churn", "will not churn"]:
-            return 0
-
-    return None
-
-
-def extract_prediction_data(api_response):
-    """
-    Handles different possible API response formats.
-    Returns:
-        prediction (0/1/None),
-        churn_probability (float between 0 and 1 or None),
-        percentile (int/float/None)
-    """
-    prediction = None
-    churn_probability = None
-    percentile = None
-
-    if not isinstance(api_response, dict):
-        return prediction, churn_probability, percentile
-
-    # Case 1: nested inside "result"
-    if isinstance(api_response.get("result"), dict):
-        result_obj = api_response["result"]
-
-        prediction = normalize_prediction(result_obj.get("prediction"))
-
-        probas = result_obj.get("probas")
-        if isinstance(probas, dict):
-            churn_probability = probas.get("1", probas.get(1))
-
-        percentile = result_obj.get("probaPercentile")
-
-    # Case 2: flat response
-    if prediction is None and "prediction" in api_response:
-        prediction = normalize_prediction(api_response.get("prediction"))
-
-    if churn_probability is None and "probability" in api_response:
-        churn_probability = api_response.get("probability")
-
-    # Case 3: list under predictions
-    if prediction is None and isinstance(api_response.get("predictions"), list) and api_response["predictions"]:
-        first_pred = api_response["predictions"][0]
-        if isinstance(first_pred, dict):
-            prediction = normalize_prediction(
-                first_pred.get("prediction", first_pred.get("result", first_pred.get("value")))
-            )
-
-            if churn_probability is None:
-                if "probability" in first_pred:
-                    churn_probability = first_pred["probability"]
-                elif isinstance(first_pred.get("probas"), dict):
-                    churn_probability = first_pred["probas"].get("1", first_pred["probas"].get(1))
-
-    # Convert probability safely
-    try:
-        if churn_probability is not None:
-            churn_probability = float(churn_probability)
-    except Exception:
-        churn_probability = None
-
-    return prediction, churn_probability, percentile
-
-
-# =========================
-# STYLING
-# =========================
-st.markdown("""
-<style>
-    .stApp {
-        background: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+payload = {
+    "features": {
+        "Country": "United States",
+        "State": "California",
+        "City": "Los Angeles",
+        "Gender": "Male",
+        "Senior Citizen": False,
+        "Partner": False,
+        "Dependents": False,
+        "Tenure Months": 2,
+        "Phone Service": True,
+        "Multiple Lines": "No",
+        "Internet Service": "DSL",
+        "Online Security": "Yes",
+        "Online Backup": "Yes",
+        "Device Protection": "No",
+        "Tech Support": "No",
+        "Streaming TV": "No",
+        "Streaming Movies": "No",
+        "Contract": "Month-to-month",
+        "Paperless Billing": True,
+        "Payment Method": "Mailed check",
+        "Monthly Charges": 53.85,
+        "Total Charges": 108.15
     }
+}
 
-    .hero-card {
-        background: white;
-        border-radius: 22px;
-        padding: 24px 28px;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.06);
-        margin-bottom: 18px;
-        border: 1px solid #eaeef3;
-    }
-
-    .main-title {
-        font-size: 40px;
-        font-weight: 800;
-        margin-bottom: 6px;
-        color: #111827;
-    }
-
-    .sub-title {
-        color: #6b7280;
-        font-size: 16px;
-        margin-bottom: 0;
-    }
-
-    .section-card {
-        background: white;
-        border-radius: 18px;
-        padding: 22px;
-        box-shadow: 0 8px 22px rgba(0,0,0,0.05);
-        border: 1px solid #eaeef3;
-        margin-bottom: 16px;
-    }
-
-    .result-box {
-        padding: 22px;
-        border-radius: 18px;
-        font-size: 26px;
-        font-weight: 800;
-        text-align: center;
-        margin-top: 14px;
-        margin-bottom: 12px;
-        box-shadow: 0 10px 22px rgba(0,0,0,0.06);
-    }
-
-    .result-yes {
-        background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
-        color: #9f1239;
-        border: 1px solid #fecdd3;
-    }
-
-    .result-no {
-        background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
-        color: #065f46;
-        border: 1px solid #a7f3d0;
-    }
-
-    .metric-card {
-        background: #f8fafc;
-        border: 1px solid #e5e7eb;
-        border-radius: 16px;
-        padding: 16px;
-        text-align: center;
-    }
-
-    .metric-title {
-        color: #6b7280;
-        font-size: 14px;
-        margin-bottom: 6px;
-    }
-
-    .metric-value {
-        font-size: 28px;
-        font-weight: 800;
-        color: #111827;
-    }
-
-    div.stButton > button {
-        width: 100%;
-        height: 3.2em;
-        border-radius: 12px;
-        font-size: 18px;
-        font-weight: 700;
-        border: none;
-        background: linear-gradient(90deg, #111827 0%, #1f2937 100%);
-        color: white;
-        box-shadow: 0 8px 18px rgba(17,24,39,0.15);
-    }
-
-    div.stButton > button:hover {
-        transform: translateY(-1px);
-    }
-
-    label, .stNumberInput label, .stSelectbox label, .stTextInput label {
-        font-weight: 600 !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# =========================
-# HEADER
-# =========================
-st.markdown('<div class="hero-card">', unsafe_allow_html=True)
-col_logo, col_text = st.columns([1, 4])
-
-with col_logo:
-    st.image(LOGO_URL, width=180)
-
-with col_text:
-    st.markdown('<div class="main-title">Cell C Churn Predictor</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub-title">AI-powered customer churn scoring for customer retention decisions</div>',
-        unsafe_allow_html=True
-    )
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# FORM AREA
-# =========================
-st.markdown('<div class="section-card">', unsafe_allow_html=True)
-st.subheader("Customer Details")
-
-with st.form("churn_form"):
-    col1, col2 = st.columns(2)
-
-    with col1:
-        country = st.text_input("Country", value="United States")
-        state = st.text_input("State", value="California")
-        city = st.text_input("City", value="Los Angeles")
-        gender = st.selectbox("Gender", ["Male", "Female"], index=0)
-        senior_citizen = st.selectbox("Senior Citizen", [False, True], index=0)
-        partner = st.selectbox("Partner", [False, True], index=0)
-        dependents = st.selectbox("Dependents", [False, True], index=0)
-        tenure_months = st.number_input("Tenure Months", min_value=0, max_value=120, value=2, step=1)
-        phone_service = st.selectbox("Phone Service", [True, False], index=0)
-        multiple_lines = st.selectbox("Multiple Lines", ["No", "Yes", "No phone service"], index=0)
-        internet_service = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"], index=0)
-
-    with col2:
-        online_security = st.selectbox("Online Security", ["Yes", "No", "No internet service"], index=0)
-        online_backup = st.selectbox("Online Backup", ["Yes", "No", "No internet service"], index=0)
-        device_protection = st.selectbox("Device Protection", ["Yes", "No", "No internet service"], index=1)
-        tech_support = st.selectbox("Tech Support", ["Yes", "No", "No internet service"], index=1)
-        streaming_tv = st.selectbox("Streaming TV", ["Yes", "No", "No internet service"], index=1)
-        streaming_movies = st.selectbox("Streaming Movies", ["Yes", "No", "No internet service"], index=1)
-        contract = st.selectbox("Contract", ["Month-to-month", "One year", "Two year"], index=0)
-        paperless_billing = st.selectbox("Paperless Billing", [False, True], index=1)
-        payment_method = st.selectbox(
-            "Payment Method",
-            ["Mailed check", "Electronic check", "Bank transfer (automatic)", "Credit card (automatic)"],
-            index=0
-        )
-        monthly_charges = st.number_input("Monthly Charges", min_value=0.0, max_value=1000.0, value=53.85, step=0.01)
-        total_charges = st.number_input("Total Charges", min_value=0.0, max_value=50000.0, value=108.15, step=0.01)
-
-    submitted = st.form_submit_button("Predict Churn")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# API CALL
-# =========================
-if submitted:
-    payload = {
-        "features": {
-            "Country": country,
-            "State": state,
-            "City": city,
-            "Gender": gender,
-            "Senior Citizen": senior_citizen,
-            "Partner": partner,
-            "Dependents": dependents,
-            "Tenure Months": tenure_months,
-            "Phone Service": phone_service,
-            "Multiple Lines": multiple_lines,
-            "Internet Service": internet_service,
-            "Online Security": online_security,
-            "Online Backup": online_backup,
-            "Device Protection": device_protection,
-            "Tech Support": tech_support,
-            "Streaming TV": streaming_tv,
-            "Streaming Movies": streaming_movies,
-            "Contract": contract,
-            "Paperless Billing": paperless_billing,
-            "Payment Method": payment_method,
-            "Monthly Charges": monthly_charges,
-            "Total Charges": total_charges
-        }
-    }
-
-    headers = {
-        "Authorization": f"Bearer {BEARER_TOKEN}",
+# 1) Bearer
+r1 = requests.post(
+    url,
+    json=payload,
+    headers={
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
-    }
+    },
+    timeout=30
+)
+print("Bearer:", r1.status_code, r1.text[:500])
 
-    with st.spinner("Scoring customer..."):
-        try:
-            response = requests.post(
-                ENDPOINT_URL,
-                json=payload,
-                headers=headers,
-                timeout=30
-            )
-
-            response.raise_for_status()
-            api_result = response.json()
-
-            prediction, churn_probability, percentile = extract_prediction_data(api_result)
-
-            st.markdown('<div class="section-card">', unsafe_allow_html=True)
-            st.subheader("Prediction Result")
-
-            if prediction == 1:
-                st.markdown(
-                    '<div class="result-box result-yes">⚠️ High Risk: Customer WILL churn</div>',
-                    unsafe_allow_html=True
-                )
-                recommendation = "Recommended action: proactive retention offer, customer outreach, or service review."
-            elif prediction == 0:
-                st.markdown(
-                    '<div class="result-box result-no">✅ Low Risk: Customer will NOT churn</div>',
-                    unsafe_allow_html=True
-                )
-                recommendation = "Recommended action: keep standard engagement and monitor periodically."
-            else:
-                st.warning("Prediction returned successfully, but the label could not be parsed.")
-                recommendation = "Please review the raw API response below."
-
-            c1, c2, c3 = st.columns(3)
-
-            with c1:
-                st.markdown(
-                    f"""
-                    <div class="metric-card">
-                        <div class="metric-title">Prediction</div>
-                        <div class="metric-value">{prediction if prediction is not None else "N/A"}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            with c2:
-                prob_display = "N/A"
-                if churn_probability is not None:
-                    prob_display = f"{churn_probability * 100:.1f}%"
-
-                st.markdown(
-                    f"""
-                    <div class="metric-card">
-                        <div class="metric-title">Churn Probability</div>
-                        <div class="metric-value">{prob_display}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            with c3:
-                perc_display = f"{percentile}%" if percentile is not None else "N/A"
-                st.markdown(
-                    f"""
-                    <div class="metric-card">
-                        <div class="metric-title">Percentile</div>
-                        <div class="metric-value">{perc_display}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-
-            if churn_probability is not None:
-                st.markdown("##### Confidence")
-                st.progress(max(0.0, min(1.0, churn_probability)))
-
-            st.info(recommendation)
-
-            with st.expander("Raw API response"):
-                st.json(api_result)
-
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        except requests.exceptions.HTTPError:
-            st.error(f"HTTP Error {response.status_code}")
-            try:
-                st.json(response.json())
-            except Exception:
-                st.text(response.text)
-
-        except requests.exceptions.RequestException as e:
-            st.error(f"Request failed: {e}")
-
-        except Exception as e:
-            st.error(f"Unexpected error: {e}")
+# 2) Basic Auth
+r2 = requests.post(
+    url,
+    json=payload,
+    auth=(api_key, ""),
+    headers={"Content-Type": "application/json"},
+    timeout=30
+)
+print("Basic:", r2.status_code, r2.text[:500])
