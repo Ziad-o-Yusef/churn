@@ -373,10 +373,7 @@ if submitted:
     st.subheader("Prediction Result")
 
     if source == "DEMO_FALLBACK":
-        st.markdown(
-            '<div class="demo-warning">Demo Mode: The API is unavailable, so this result is randomly generated for presentation purposes only.</div>',
-            unsafe_allow_html=True
-        )
+       
 
     if prediction == 1:
         st.markdown(
